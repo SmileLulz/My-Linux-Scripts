@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOCKET="/tmp/playyt-mpv-socket"
+CONFIG_DIR="$HOME/.config/playyt"
+CONFIG_FILE="$CONFIG_DIR/config.conf"
+
+mkdir -p "$CONFIG_DIR"
+
+print_usage() {
+    echo "Usage:"
+    echo "  playyt song_name       # plays a song or audio"
+    echo
+    echo "Options:"
+    echo "  -v 30 | --volume 30    # set volume"
+    echo "  -s | --stop            # stop playback"
+    echo "  -m | --music           # force search 'music'"
+    echo "  -l | --loop            # loop the track"
+    exit 1
+}
+
+write_config() {
+    echo "volume=$1" > "$CONFIG_FILE"
+}
+
+read_config_volume() {
+    [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE" && echo "${volume:-}"
+}
+
+VOLUME=""
+QUERY=()
+STOP=false
+FORCE_MUSIC=false
+LOOP=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v|--volume)
+            shift
+            [[ -z "${1:-}" ]] && print_usage
+            VOLUME="$1"
+            shift
+            ;;
+        -s|--stop)
+            STOP=true
+            shift
+            ;;
+        -l|--loop)
+            LOOP=true
+            shift
+            ;;
+        -m|--music)
+            FORCE_MUSIC=true
+            shift
+            ;;
+        -*)
+            print_usage
+            ;;
+        *)
+            QUERY+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if $STOP; then
+    [[ -S "$SOCKET" ]] && echo '{ "command": ["quit"] }' | socat - "$SOCKET" >/dev/null 2>&1 || true
+    exit 0
+fi
+
+if [[ -n "$VOLUME" && ${#QUERY[@]} -eq 0 ]]; then
+    write_config "$VOLUME"
+    [[ -S "$SOCKET" ]] && echo '{ "command": ["set_property", "volume", '"$VOLUME"'] }' | socat - "$SOCKET" >/dev/null 2>&1 || true
+    exit 0
+fi
+
+[[ ${#QUERY[@]} -eq 0 ]] && print_usage
+
+RAW_QUERY="${QUERY[*]}"
+SEARCH_QUERY="${RAW_QUERY//_/ }"
+
+[[ -z "$VOLUME" ]] && VOLUME="$(read_config_volume)"
+[[ -n "$VOLUME" ]] && write_config "$VOLUME"
+
+[[ -S "$SOCKET" ]] && rm -f "$SOCKET"
+
+SEARCH_URL="ytsearch1:${SEARCH_QUERY} official"
+$FORCE_MUSIC && SEARCH_URL="ytsearch1:${SEARCH_QUERY} official music"
+
+LOOP_STATE=no
+$LOOP && LOOP_STATE=inf
+
+mpv \
+    --no-video \
+    --no-terminal \
+    --force-window=no \
+    --input-ipc-server="$SOCKET" \
+    --player-operation-mode=pseudo-gui \
+    --script-opts=mpris=yes \
+    --ytdl-format=bestaudio \
+    --loop-file="$LOOP_STATE" \
+    --loop-playlist=no \
+    ${VOLUME:+--volume="$VOLUME"} \
+    "ytdl://${SEARCH_URL}" &
+
+MPV_PID=$!
+
+while [[ ! -S "$SOCKET" ]]; do sleep 0.05; done
+
+while :; do
+    STATUS=$(echo '{ "command": ["get_property", "core-idle"] }' | socat - "$SOCKET" 2>/dev/null | jq -r '.data')
+    [[ "$STATUS" == "false" ]] && break
+    sleep 0.05
+done
+
+TITLE=$(echo '{ "command": ["get_property", "media-title"] }' | socat - "$SOCKET" 2>/dev/null | jq -r '.data // empty')
+META=$(echo '{ "command": ["get_property", "metadata"] }' | socat - "$SOCKET" 2>/dev/null)
+URL=$(echo '{ "command": ["get_property", "path"] }' | socat - "$SOCKET" 2>/dev/null | jq -r '.data // empty')
+ARTIST=$(echo "$META" | jq -r '.data.artist // empty')
+ALBUM=$(echo "$META" | jq -r '.data.album // empty')
+DATE=$(echo "$META" | jq -r '.data.date // empty')
+UPLOADER=$(echo "$META" | jq -r '.data.uploader // empty')
+CHANNEL=$(echo "$META" | jq -r '.data.channel_url // empty')
+
+: "${ARTIST:=empty}"
+: "${ALBUM:=empty}"
+: "${DATE:=empty}"
+: "${UPLOADER:=empty}"
+: "${CHANNEL:=empty}"
+: "${TITLE:=empty}"
+: "${URL:=empty}"
+[[ "$ARTIST" == "empty" && "$TITLE" == *" - "* ]] && ARTIST="${TITLE%% - *}"
+
+RESET="\e[0m"
+BOLD="\e[1m"
+LABEL_COLOR="\e[1;36m"
+VALUE_COLOR="\e[37m"
+HEADER_COLOR="\e[1;95m"
+
+print_line() {
+    local indent="$1"
+    local label="$2"
+    local value="$3"
+    printf "%s%b%-12s%b %b|%b %b%s%b\n" "$indent" "$LABEL_COLOR" "$label" "$RESET" "$BOLD" "$RESET" "$VALUE_COLOR" "$value" "$RESET"
+}
+
+echo
+printf "%bPLAYING:%b %b%s%b\n" "$HEADER_COLOR" "$RESET" "$BOLD" "$TITLE" "$RESET"
+echo
+printf "%bMETA-DATA:%b\n" "$HEADER_COLOR" "$RESET"
+print_line "  " "Artist"      "$ARTIST"
+print_line "  " "Album"       "$ALBUM"
+print_line "  " "Date"        "$DATE"
+print_line "  " "Title"       "$TITLE"
+print_line "  " "Uploader"    "$UPLOADER"
+print_line "  " "URL"         "$URL"
+print_line "  " "Channel_URL" "$CHANNEL"
+
+MPV_AO_TEXT="mpv audio output active"
+echo
+printf "%bAO:%b %b%s%b\n" "$HEADER_COLOR" "$RESET" "$BOLD" "$MPV_AO_TEXT" "$RESET"
+echo
+
+disown "$MPV_PID"
+exit 0

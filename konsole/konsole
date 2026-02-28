@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+# If no Konsole running → start normally
+if ! pgrep -x konsole > /dev/null; then
+    exec /usr/bin/konsole "$@"
+else
+    exec /usr/bin/konsole --new-tab "$@"
+fi

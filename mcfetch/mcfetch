@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+URL="https://raw.githubusercontent.com/misode/mcmeta/summary/versions/data.json"
+
+usage() {
+  echo "Usage:"
+  echo "  mcfetch rp-formats [--snapshots|-s] [--version|-v X]"
+  echo "  mcfetch dp-formats [--snapshots|-s] [--version|-v X]"
+  exit 1
+}
+
+fetch_formats() {
+  field="$1"
+  shift
+
+  include_snapshots=false
+  version_prefix=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --snapshots|-s)
+        include_snapshots=true
+        shift
+        ;;
+      --version|-v)
+        version_prefix="${2:-}"
+        [[ -z "$version_prefix" ]] && usage
+        shift 2
+        ;;
+      *)
+        usage
+        ;;
+    esac
+  done
+
+  curl -fsSL "$URL" |
+  jq -r \
+    --arg field "$field" \
+    --arg ver "$version_prefix" \
+    --argjson snaps "$include_snapshots" '
+    .[]
+    | select(
+        (.type=="release")
+        or
+        ($snaps and .type=="snapshot")
+      )
+    | select(
+        ($ver == "")
+        or
+        (.id | startswith($ver))
+      )
+    | "\(.id)\t\(.[$field])"
+  ' |
+  sort -V |
+  column -t
+}
+
+case "${1:-}" in
+  rp-formats)
+    shift
+    fetch_formats "resource_pack_version" "$@"
+    ;;
+  dp-formats)
+    shift
+    fetch_formats "data_pack_version" "$@"
+    ;;
+  *)
+    usage
+    ;;
+esac
