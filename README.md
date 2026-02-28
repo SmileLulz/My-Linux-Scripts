@@ -6,6 +6,10 @@ And don't ask for updates pls :)
 
 ---
 
+# Insteallation
+
+Put any script you like in your `~/.local/bin` folder.
+
 # Scripts Info
 
 - [playyt](https://github.com/SmileLulz/My-Linux-Scripts/tree/main/playyt) : Play YouTube audios from your terminal without locking the session
