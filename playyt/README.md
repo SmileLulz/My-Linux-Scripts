@@ -9,7 +9,7 @@
   sudo dnf install mpv mpv-mpris
   ```
 
-# Usage and Arguments: 
+# Usage and Arguments
 
 - Play a song or audio:
 
